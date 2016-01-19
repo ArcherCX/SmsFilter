@@ -1,4 +1,4 @@
-package com.example.archer.smsfilter;
+package com.example.archer.smsfilter.activity;
 
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -9,6 +9,8 @@ import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+
+import com.example.archer.smsfilter.R;
 
 import java.util.List;
 
