@@ -9,8 +9,11 @@ import android.provider.Telephony;
 import android.util.Log;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.IXposedHookZygoteInit;
@@ -29,25 +32,27 @@ import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
  */
 public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit {
     private final String TAG = "XSmsFilter";
-    private final String hangoutsPkgName = "com.google.android.talk";
-    //    private final String hangoutsPkgName = "com.example.archer.simplestapp";
-    private final String targetClassReceiver = "com.google.android.apps.hangouts.sms.SmsReceiver";
-    private final String targetClassDeliver = "com.google.android.apps.hangouts.sms.SmsDeliverReceiver";
-    //    private final String targetClass = "com.example.archer.simplestapp.MyReceiver";
-    private final String hookMethod = "onReceive";
+    private final Map<String, Set<String>> smsReceiverApps = new HashMap<>();
+//    private final String targetClassReceiver = "com.google.android.apps.hangouts.sms.SmsReceiver";
+//    private final String targetClassDeliver = "com.google.android.apps.hangouts.sms.SmsDeliverReceiver";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         String packageName = lpparam.packageName;
-        if (!packageName.equals(hangoutsPkgName)) {
+        if (!smsReceiverApps.containsKey(packageName)) {
             return;
         }
 //        XposedBridge.hookAllMethods();
         Log.e("Xposed", packageName + " PackageLoaded now !!!!!");
-        XC_MethodHook xc_methodHookR = new MyXC_MethodHook(targetClassReceiver);
-        XC_MethodHook xc_methodHookD = new MyXC_MethodHook(targetClassDeliver);
-        findAndHookMethod(targetClassReceiver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHookR);
-        findAndHookMethod(targetClassDeliver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHookD);
+        String hookMethod = "onReceive";
+        Set<String> packages = smsReceiverApps.keySet();
+        for (String app : packages) {
+            Set<String> receivers = smsReceiverApps.get(app);
+            for (String receiver : receivers) {
+                XC_MethodHook xc_methodHook = new MyXC_MethodHook(receiver);
+                findAndHookMethod(receiver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHook);
+            }
+        }
     }
 
     /*
@@ -64,6 +69,9 @@ public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit
      * Note that there is no need to handle arguments in this case. And we
      * don't need them so in case they change over time, we will simply use
      * the hookAll feature.
+     *
+     * Wait till startBootstrapServices start PackageManagerService , then
+     * get PackageManager to get all app who try to receive sms.
      */
     @Override
     public void initZygote(StartupParam startupParam) throws Throwable {
@@ -75,98 +83,57 @@ public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         try {
                             final ClassLoader loader = Thread.currentThread().getContextClassLoader();
-                            final Class<?> am = Class.forName("com.android.server.am.ActivityManagerService", false, loader);
-                            XposedBridge.hookAllConstructors(am, new XC_MethodHook() {
-                                @Override
-                                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                                    try {
-                                        Class<?> ssClass = Class.forName("com.android.server.SystemServer", false, loader);
-
-                                        Field fContext = am.getDeclaredField("mContext");
-                                        fContext.setAccessible(true);
-                                        Context context = (Context) fContext.get(param.thisObject);
-                                        PackageManager pm = null;
-                                        if (context == null) {
-                                            Log.e(TAG, "context is null");
-                                        } else {
-                                            pm = context.getPackageManager();
-                                            if (pm == null) {
-                                                Log.e(TAG, "pm is null");
-                                            }
-                                        }
-//                                        Method mGetPackageManager = Context.class.getDeclaredMethod("getPackageManager");
-//                                        PackageManager pm = (PackageManager) mGetPackageManager.invoke(context);
-//                                        if (pm == null) {
-//                                            Log.e(TAG, "pm is null");
-//                                        }
-                                        Intent intentD = new Intent();
-                                        intentD.setAction(Telephony.Sms.Intents.SMS_DELIVER_ACTION);
-                                        Intent intentR = new Intent();
-                                        intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
-                                        List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
-                                        for (ResolveInfo info :
-                                                deliverSms) {
-                                            String packageName = info.activityInfo.packageName;
-                                            Log.d(TAG, "packageNameD : " + packageName + "---" + info.activityInfo.name);
-                                        }
-                                        List<ResolveInfo> receiverSms = pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER);
-                                        for (ResolveInfo info :
-                                                receiverSms) {
-                                            String packageName = info.activityInfo.packageName;
-                                            Log.i(TAG, "packageNameR : " + packageName + "---" + info.activityInfo.name);
-                                        }
-                                    } catch (Throwable ex) {
-                                        ex.printStackTrace();
-                                        Log.e(TAG, ex.getMessage());
-                                    }
-                                }
-                            });
+                            final Class<?> cSystemServer = Class.forName("com.android.server.SystemServer", false, loader);
+                            getSmsReceiver(cSystemServer);
                         } catch (Throwable ex) {
                             ex.printStackTrace();
                             Log.e(TAG, ex.getMessage());
-
                         }
                     }
+
                 });
 
             } else {
                 final Class<?> cSystemServer = Class.forName("com.android.server.SystemServer");
-                Method mMain = cSystemServer.getDeclaredMethod("main", String[].class);
-                XposedBridge.hookMethod(mMain, new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            Field fContext = cSystemServer.getDeclaredField("mSystemContext");
-                            fContext.setAccessible(true);
-                            Method mGetPackageManager = Context.class.getDeclaredMethod("getPackageManager");
-                            PackageManager pm = (PackageManager) mGetPackageManager.invoke(fContext);
-                            Intent intentD = new Intent();
-                            intentD.setAction(Telephony.Sms.Intents.SMS_DELIVER_ACTION);
-                            Intent intentR = new Intent();
-                            intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
-                            List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
-                            for (ResolveInfo info :
-                                    deliverSms) {
-                                String packageName = info.activityInfo.packageName;
-                                Log.d(TAG, "packageNameD : " + packageName + "---" + info.activityInfo.name);
-                            }
-                            List<ResolveInfo> receiverSms = pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER);
-                            for (ResolveInfo info :
-                                    receiverSms) {
-                                String packageName = info.activityInfo.packageName;
-                                Log.i(TAG, "packageNameR : " + packageName + "---" + info.activityInfo.name);
-                            }
-                        } catch (Throwable ex) {
-                            ex.printStackTrace();
-                            Log.e(TAG, ex.getMessage());
-                        }
-                    }
-                });
+                getSmsReceiver(cSystemServer);
             }
         } catch (Throwable ex) {
             ex.printStackTrace();
             Log.e(TAG, ex.getMessage());
         }
+    }
+
+    private void getSmsReceiver(final Class<?> ssClass) {
+        findAndHookMethod(ssClass, "startBootstrapServices", new XC_MethodHook() {
+
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                Field fContext = ssClass.getDeclaredField("mSystemContext");
+                fContext.setAccessible(true);
+                Context context = (Context) fContext.get(param.thisObject);
+                PackageManager pm = context.getPackageManager();
+                Intent intentD = new Intent();
+                intentD.setAction(Telephony.Sms.Intents.SMS_DELIVER_ACTION);
+                Intent intentR = new Intent();
+                intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
+                List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
+                for (ResolveInfo info : deliverSms) {
+                    String packageName = info.activityInfo.packageName;
+                    Log.d(TAG, "packageNameD : " + packageName + "---" + info.activityInfo.name);
+                }
+                deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
+                for (ResolveInfo info : deliverSms) {
+                    String packageName = info.activityInfo.packageName;
+                    Set<String> receivers = smsReceiverApps.get(packageName);
+                    if (receivers == null) {
+                        receivers = new HashSet<String>(4);
+                        smsReceiverApps.put(packageName, receivers);
+                    }
+                    receivers.add(info.activityInfo.name);
+                    Log.d(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
+                }
+            }
+        });
     }
 
     class MyXC_MethodHook extends XC_MethodHook {
