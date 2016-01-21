@@ -1,4 +1,4 @@
-package com.example.archer.smsfilter.activityb;
+package com.example.archer.smsfilter.activity;
 
 import android.content.Intent;
 import android.content.pm.PackageManager;

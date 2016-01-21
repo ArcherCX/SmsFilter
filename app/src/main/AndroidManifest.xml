@@ -18,7 +18,7 @@
             android:name="xposedminversion"
             android:value="54" />
 
-        <activity android:name=".activityb.MyTestActivity">
+        <activity android:name=".activity.MyTestActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
