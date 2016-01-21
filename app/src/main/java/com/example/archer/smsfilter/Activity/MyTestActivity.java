@@ -15,7 +15,7 @@ import com.example.archer.smsfilter.R;
 import java.util.List;
 
 public class MyTestActivity extends AppCompatActivity {
-    private final String Tag = "chenxin";
+    private final String Tag = "MyTestActivity";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
