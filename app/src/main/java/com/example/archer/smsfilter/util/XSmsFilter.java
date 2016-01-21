@@ -1,4 +1,4 @@
-package com.example.archer.smsfilter;
+package com.example.archer.smsfilter.util;
 
 import android.content.Context;
 import android.content.Intent;
@@ -8,7 +8,6 @@ import android.os.Environment;
 import android.os.Message;
 import android.provider.Telephony;
 import android.telephony.SmsMessage;
-import android.util.Log;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -16,11 +15,9 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
 
@@ -31,27 +28,8 @@ import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
  * @version 1.0
  * @since 15/12/30
  */
-public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit {
+public class XSmsFilter implements IXposedHookZygoteInit {
     private final String TAG = "XSmsFilter";
-    private final String TMEP_FILE_PATH = "/cache/temp_sms_filter.txt";
-    //    private final String targetClassReceiver = "com.google.android.apps.hangouts.sms.SmsReceiver";
-//    private final String targetClassDeliver = "com.google.android.apps.hangouts.sms.SmsDeliverReceiver";
-
-    @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-//        Log.e(TAG, "packageName : " + packageName + " ---- smsReceiverApps.size : ");
-//        if (!smsReceiverApps.containsKey(packageName)) {
-            return;
-//        }
-//        XposedBridge.hookAllMethods();
-//        Log.e("Xposed", packageName + " PackageLoaded now !!!!!");
-//        String hookMethod = "onReceive";
-        /*Set<String> receivers = smsReceiverApps.get(packageName);
-        for (String receiver : receivers) {
-            XC_MethodHook xc_methodHook = new MyXC_MethodHook(receiver);
-            findAndHookMethod(receiver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHook);
-        }*/
-    }
 
     /*
      * ActivityManagerService is the beginning of the main "android"
