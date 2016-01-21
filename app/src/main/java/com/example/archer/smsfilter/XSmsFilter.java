@@ -4,16 +4,17 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.os.Build;
+import android.os.Environment;
+import android.os.Message;
 import android.provider.Telephony;
+import android.telephony.SmsMessage;
 import android.util.Log;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.IXposedHookZygoteInit;
@@ -32,27 +33,24 @@ import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
  */
 public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit {
     private final String TAG = "XSmsFilter";
-    private final Map<String, Set<String>> smsReceiverApps = new HashMap<>();
-//    private final String targetClassReceiver = "com.google.android.apps.hangouts.sms.SmsReceiver";
+    private final String TMEP_FILE_PATH = "/cache/temp_sms_filter.txt";
+    //    private final String targetClassReceiver = "com.google.android.apps.hangouts.sms.SmsReceiver";
 //    private final String targetClassDeliver = "com.google.android.apps.hangouts.sms.SmsDeliverReceiver";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        String packageName = lpparam.packageName;
-        if (!smsReceiverApps.containsKey(packageName)) {
+//        Log.e(TAG, "packageName : " + packageName + " ---- smsReceiverApps.size : ");
+//        if (!smsReceiverApps.containsKey(packageName)) {
             return;
-        }
+//        }
 //        XposedBridge.hookAllMethods();
-        Log.e("Xposed", packageName + " PackageLoaded now !!!!!");
-        String hookMethod = "onReceive";
-        Set<String> packages = smsReceiverApps.keySet();
-        for (String app : packages) {
-            Set<String> receivers = smsReceiverApps.get(app);
-            for (String receiver : receivers) {
-                XC_MethodHook xc_methodHook = new MyXC_MethodHook(receiver);
-                findAndHookMethod(receiver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHook);
-            }
-        }
+//        Log.e("Xposed", packageName + " PackageLoaded now !!!!!");
+//        String hookMethod = "onReceive";
+        /*Set<String> receivers = smsReceiverApps.get(packageName);
+        for (String receiver : receivers) {
+            XC_MethodHook xc_methodHook = new MyXC_MethodHook(receiver);
+            findAndHookMethod(receiver, lpparam.classLoader, hookMethod, Context.class, Intent.class, xc_methodHook);
+        }*/
     }
 
     /*
@@ -76,6 +74,45 @@ public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit
     @Override
     public void initZygote(StartupParam startupParam) throws Throwable {
         try {
+            Class<?> cInboundSmsHandler = Class.forName("com.android.internal.telephony.InboundSmsHandler$DeliveringState");
+            findAndHookMethod(cInboundSmsHandler, "processMessage", Message.class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    try {
+                        Message rilMsg = (Message) param.args[0];
+                        /*com.android.internal.telephony.InboundSmsHandler.EVENT_NEW_SMS = 1;
+                        * com.android.internal.telephony.InboundSmsHandler.EVENT_INJECT_SMS = 8;*/
+                        if (rilMsg.what == 1 || rilMsg.what == 8) {
+                            XposedBridge.log("Sms what = " + rilMsg.what);
+                            Class<?> AsyncResult = Class.forName("android.os.AsyncResult");
+                            Field result = AsyncResult.getField("result");
+                            SmsMessage sms = (SmsMessage) result.get(rilMsg.obj);
+                            if (sms != null) {
+                                Field mWrappedSmsMessage = SmsMessage.class.getDeclaredField("mWrappedSmsMessage");
+                                mWrappedSmsMessage.setAccessible(true);
+                                Class<?> SmsMessageBase = Class.forName("com.android.internal.telephony.SmsMessageBase");
+                                Field mMessageBody = SmsMessageBase.getDeclaredField("mMessageBody");
+                                mMessageBody.setAccessible(true);
+                                String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
+                                Log.i(TAG, "Message Body here:" + msgBody);
+                            }
+                        }
+                    } catch (ClassNotFoundException e) {
+                        e.printStackTrace();
+                        Log.e(TAG, "hook processMessage error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
+                    }
+                }
+            });
+        } catch (Throwable e) {
+            e.printStackTrace();
+            Log.e(TAG, "initZygote error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
+            StackTraceElement[] stackTrace = e.getStackTrace();
+            for (StackTraceElement element : stackTrace) {
+                Log.e(TAG, element.toString());
+            }
+        }
+
+        /*try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Class<?> at = Class.forName("android.app.ActivityThread");
                 XposedBridge.hookAllMethods(at, "systemMain", new XC_MethodHook() {
@@ -100,7 +137,7 @@ public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit
         } catch (Throwable ex) {
             ex.printStackTrace();
             Log.e(TAG, ex.getMessage());
-        }
+        }*/
     }
 
     private void getSmsReceiver(final Class<?> ssClass) {
@@ -117,20 +154,34 @@ public class XSmsFilter implements IXposedHookLoadPackage, IXposedHookZygoteInit
                 Intent intentR = new Intent();
                 intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
                 List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
-                for (ResolveInfo info : deliverSms) {
-                    String packageName = info.activityInfo.packageName;
-                    Log.d(TAG, "packageNameD : " + packageName + "---" + info.activityInfo.name);
+
+                File tempFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "temp_cache.txt");
+                if (tempFile.exists()) {
+                    boolean delete = tempFile.delete();
+                    Log.e(TAG, tempFile.getAbsolutePath() + " --- delete temp_sms_filter.txt !!!! --- " + delete);
                 }
-                deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
-                for (ResolveInfo info : deliverSms) {
-                    String packageName = info.activityInfo.packageName;
-                    Set<String> receivers = smsReceiverApps.get(packageName);
-                    if (receivers == null) {
-                        receivers = new HashSet<String>(4);
-                        smsReceiverApps.put(packageName, receivers);
+                if (tempFile.createNewFile()) {
+                    boolean delete = tempFile.delete();
+                    Log.i(TAG, "delete temp_sms_filter.txt !!!! --- " + delete);
+                }
+                if (tempFile.createNewFile()) {
+                    FileOutputStream fos = new FileOutputStream(tempFile);
+                    try {
+                        for (ResolveInfo info : deliverSms) {
+                            String packageName = info.activityInfo.packageName;
+                            Log.d(TAG, tempFile.getAbsolutePath() + " --- packageNameD : " + packageName + "---" + info.activityInfo.name);
+                        }
+                        deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
+                        for (ResolveInfo info : deliverSms) {
+                            String packageName = info.activityInfo.packageName;
+                            fos.write((packageName + ":" + info.activityInfo.name + "\n").getBytes());
+                            Log.i(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    } finally {
+                        fos.close();
                     }
-                    receivers.add(info.activityInfo.name);
-                    Log.d(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
                 }
             }
         });
