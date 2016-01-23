@@ -11,7 +11,7 @@ public final class Log {
     /**
      * 控制Log日志开关
      */
-    public static boolean DEBUG = false;
+    public static boolean DEBUG = true;
     private static String defaultTag = "Xposed";
 
     private Log() {
@@ -81,7 +81,7 @@ public final class Log {
         if (msg != null && msg.length > 0) {
             StringBuilder sb = new StringBuilder();
             for (Object s : msg) {
-                if (msg != null && s != null) {
+                if (s != null) {
                     sb.append(s.toString());
                 }
             }

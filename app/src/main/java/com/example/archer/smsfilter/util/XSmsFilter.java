@@ -1,17 +1,19 @@
 package com.example.archer.smsfilter.util;
 
+import android.app.AndroidAppHelper;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.os.Environment;
+import android.os.IBinder;
 import android.os.Message;
+import android.os.Process;
+import android.os.RemoteException;
 import android.provider.Telephony;
 import android.telephony.SmsMessage;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -58,10 +60,10 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     try {
                         Message rilMsg = (Message) param.args[0];
+                        XposedBridge.log("Sms what = " + rilMsg.what);
                         /*com.android.internal.telephony.InboundSmsHandler.EVENT_NEW_SMS = 1;
                         * com.android.internal.telephony.InboundSmsHandler.EVENT_INJECT_SMS = 8;*/
                         if (rilMsg.what == 1 || rilMsg.what == 8) {
-                            XposedBridge.log("Sms what = " + rilMsg.what);
                             Class<?> AsyncResult = Class.forName("android.os.AsyncResult");
                             Field result = AsyncResult.getField("result");
                             SmsMessage sms = (SmsMessage) result.get(rilMsg.obj);
@@ -72,7 +74,8 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                                 Field mMessageBody = SmsMessageBase.getDeclaredField("mMessageBody");
                                 mMessageBody.setAccessible(true);
                                 String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
-                                Log.i(TAG, "Message Body here:" + msgBody);
+                                Log.i(TAG, Process.myPid() + "---" + Process.myUid() + "---Message Body here:" + msgBody);
+                                bindService(AndroidAppHelper.currentApplication());
                             }
                         }
                     } catch (ClassNotFoundException e) {
@@ -118,6 +121,39 @@ public class XSmsFilter implements IXposedHookZygoteInit {
         }*/
     }
 
+    private void bindService(final Context mContext) {
+        try {
+            Intent service = new Intent("com.example.archer.smsfilter.service.SmsFilterService");
+            service.setPackage("com.example.archer.smsfilter");
+            boolean b = mContext.bindService(service, new ServiceConnection() {
+                @Override
+                public void onServiceConnected(ComponentName name, IBinder service) {
+                    ISmsFilterService server = ISmsFilterService.Stub.asInterface(service);
+                    try {
+                        Log.i(TAG, "server.getFilterKeyword():" + server.getFilterKeyword());
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    } finally {
+                        mContext.unbindService(this);
+                    }
+                }
+
+                @Override
+                public void onServiceDisconnected(ComponentName name) {
+                    android.util.Log.e(TAG, "service unbind");
+                }
+            }, Context.BIND_AUTO_CREATE);
+            android.util.Log.e(TAG, "bind Result:" + b);
+        } catch (Throwable e) {
+            e.printStackTrace();
+            Log.e(TAG, "bindService error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
+            StackTraceElement[] stackTrace = e.getStackTrace();
+            for (StackTraceElement element : stackTrace) {
+                Log.e(TAG, element.toString());
+            }
+        }
+    }
+
     private void getSmsReceiver(final Class<?> ssClass) {
         findAndHookMethod(ssClass, "startBootstrapServices", new XC_MethodHook() {
 
@@ -133,33 +169,14 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                 intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
                 List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
 
-                File tempFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "temp_cache.txt");
-                if (tempFile.exists()) {
-                    boolean delete = tempFile.delete();
-                    Log.e(TAG, tempFile.getAbsolutePath() + " --- delete temp_sms_filter.txt !!!! --- " + delete);
+                for (ResolveInfo info : deliverSms) {
+                    String packageName = info.activityInfo.packageName;
+                    Log.d(TAG, " --- packageNameD : " + packageName + "---" + info.activityInfo.name);
                 }
-                if (tempFile.createNewFile()) {
-                    boolean delete = tempFile.delete();
-                    Log.i(TAG, "delete temp_sms_filter.txt !!!! --- " + delete);
-                }
-                if (tempFile.createNewFile()) {
-                    FileOutputStream fos = new FileOutputStream(tempFile);
-                    try {
-                        for (ResolveInfo info : deliverSms) {
-                            String packageName = info.activityInfo.packageName;
-                            Log.d(TAG, tempFile.getAbsolutePath() + " --- packageNameD : " + packageName + "---" + info.activityInfo.name);
-                        }
-                        deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
-                        for (ResolveInfo info : deliverSms) {
-                            String packageName = info.activityInfo.packageName;
-                            fos.write((packageName + ":" + info.activityInfo.name + "\n").getBytes());
-                            Log.i(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
-                        }
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    } finally {
-                        fos.close();
-                    }
+                deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
+                for (ResolveInfo info : deliverSms) {
+                    String packageName = info.activityInfo.packageName;
+                    Log.i(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
                 }
             }
         });
