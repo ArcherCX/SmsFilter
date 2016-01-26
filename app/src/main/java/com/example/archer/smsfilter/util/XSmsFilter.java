@@ -71,7 +71,7 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                                 String filterKeyword = client.getFilterKeyword();
                                 Log.i(TAG, "client.getFilterKeyword() : " + filterKeyword);
                                 if (msgBody.matches(".*(" + filterKeyword + ").*")) {
-                                    param.setResult(null);
+                                    ((Message) param.args[0]).what = Integer.MAX_VALUE;
                                 }
                             }
                         }
