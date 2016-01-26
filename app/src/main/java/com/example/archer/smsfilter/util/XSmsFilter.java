@@ -1,21 +1,13 @@
 package com.example.archer.smsfilter.util;
 
-import android.app.AndroidAppHelper;
-import android.content.ComponentName;
-import android.content.Context;
-import android.content.Intent;
-import android.content.ServiceConnection;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
-import android.os.IBinder;
+import android.os.Build;
 import android.os.Message;
-import android.os.Process;
-import android.os.RemoteException;
-import android.provider.Telephony;
 import android.telephony.SmsMessage;
 
+import com.example.archer.smsfilter.service.SmsFilterService;
+
 import java.lang.reflect.Field;
-import java.util.List;
+import java.lang.reflect.Method;
 
 import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
@@ -54,13 +46,14 @@ public class XSmsFilter implements IXposedHookZygoteInit {
     @Override
     public void initZygote(StartupParam startupParam) throws Throwable {
         try {
+            registerBinder();
             Class<?> cInboundSmsHandler = Class.forName("com.android.internal.telephony.InboundSmsHandler$DeliveringState");
             findAndHookMethod(cInboundSmsHandler, "processMessage", Message.class, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     try {
                         Message rilMsg = (Message) param.args[0];
-                        XposedBridge.log("Sms what = " + rilMsg.what);
+                        Log.e(TAG, "Sms what = " + rilMsg.what);
                         /*com.android.internal.telephony.InboundSmsHandler.EVENT_NEW_SMS = 1;
                         * com.android.internal.telephony.InboundSmsHandler.EVENT_INJECT_SMS = 8;*/
                         if (rilMsg.what == 1 || rilMsg.what == 8) {
@@ -74,8 +67,8 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                                 Field mMessageBody = SmsMessageBase.getDeclaredField("mMessageBody");
                                 mMessageBody.setAccessible(true);
                                 String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
-                                Log.i(TAG, Process.myPid() + "---" + Process.myUid() + "---Message Body here:" + msgBody);
-                                bindService(AndroidAppHelper.currentApplication());
+                                ISmsFilterService client = SmsFilterService.getClient();
+                                Log.i(TAG, "client.getFilterKeyword() : " + client.getFilterKeyword());
                             }
                         }
                     } catch (ClassNotFoundException e) {
@@ -92,108 +85,56 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                 Log.e(TAG, element.toString());
             }
         }
-
-        /*try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                Class<?> at = Class.forName("android.app.ActivityThread");
-                XposedBridge.hookAllMethods(at, "systemMain", new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            final ClassLoader loader = Thread.currentThread().getContextClassLoader();
-                            final Class<?> cSystemServer = Class.forName("com.android.server.SystemServer", false, loader);
-                            getSmsReceiver(cSystemServer);
-                        } catch (Throwable ex) {
-                            ex.printStackTrace();
-                            Log.e(TAG, ex.getMessage());
-                        }
-                    }
-
-                });
-
-            } else {
-                final Class<?> cSystemServer = Class.forName("com.android.server.SystemServer");
-                getSmsReceiver(cSystemServer);
-            }
-        } catch (Throwable ex) {
-            ex.printStackTrace();
-            Log.e(TAG, ex.getMessage());
-        }*/
     }
 
-    private void bindService(final Context mContext) {
-        try {
-            Intent service = new Intent("com.example.archer.smsfilter.service.SmsFilterService");
-            service.setPackage("com.example.archer.smsfilter");
-            boolean b = mContext.bindService(service, new ServiceConnection() {
+
+    /**
+     * 注册IBinder服务到ServiceManager中
+     *
+     * @throws ClassNotFoundException
+     * @throws NoSuchMethodException
+     */
+    private void registerBinder() throws ClassNotFoundException, NoSuchMethodException {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            XposedBridge.hookAllMethods(at, "systemMain", new XC_MethodHook() {
                 @Override
-                public void onServiceConnected(ComponentName name, IBinder service) {
-                    ISmsFilterService server = ISmsFilterService.Stub.asInterface(service);
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     try {
-                        Log.i(TAG, "server.getFilterKeyword():" + server.getFilterKeyword());
-                    } catch (RemoteException e) {
-                        e.printStackTrace();
-                    } finally {
-                        mContext.unbindService(this);
+                        final ClassLoader loader = Thread.currentThread().getContextClassLoader();
+                        Class<?> am = Class.forName("com.android.server.am.ActivityManagerService", false, loader);
+                        XposedBridge.hookAllConstructors(am, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                                try {
+                                    SmsFilterService.register(loader);
+                                } catch (Throwable ex) {
+                                    ex.printStackTrace();
+                                    Log.e(TAG, ex.getMessage());
+                                }
+                            }
+                        });
+                    } catch (Throwable ex) {
+                        ex.printStackTrace();
+                        Log.e(TAG, ex.getMessage());
                     }
                 }
+            });
 
+        } else {
+            Class<?> cSystemServer = Class.forName("com.android.server.SystemServer");
+            Method mMain = cSystemServer.getDeclaredMethod("main", String[].class);
+            XposedBridge.hookMethod(mMain, new XC_MethodHook() {
                 @Override
-                public void onServiceDisconnected(ComponentName name) {
-                    android.util.Log.e(TAG, "service unbind");
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    try {
+                        SmsFilterService.register(null);
+                    } catch (Throwable ex) {
+                        ex.printStackTrace();
+                        Log.e(TAG, ex.getMessage());
+                    }
                 }
-            }, Context.BIND_AUTO_CREATE);
-            android.util.Log.e(TAG, "bind Result:" + b);
-        } catch (Throwable e) {
-            e.printStackTrace();
-            Log.e(TAG, "bindService error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
-            StackTraceElement[] stackTrace = e.getStackTrace();
-            for (StackTraceElement element : stackTrace) {
-                Log.e(TAG, element.toString());
-            }
-        }
-    }
-
-    private void getSmsReceiver(final Class<?> ssClass) {
-        findAndHookMethod(ssClass, "startBootstrapServices", new XC_MethodHook() {
-
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                Field fContext = ssClass.getDeclaredField("mSystemContext");
-                fContext.setAccessible(true);
-                Context context = (Context) fContext.get(param.thisObject);
-                PackageManager pm = context.getPackageManager();
-                Intent intentD = new Intent();
-                intentD.setAction(Telephony.Sms.Intents.SMS_DELIVER_ACTION);
-                Intent intentR = new Intent();
-                intentR.setAction(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
-                List<ResolveInfo> deliverSms = pm.queryBroadcastReceivers(intentD, 0);
-
-                for (ResolveInfo info : deliverSms) {
-                    String packageName = info.activityInfo.packageName;
-                    Log.d(TAG, " --- packageNameD : " + packageName + "---" + info.activityInfo.name);
-                }
-                deliverSms.addAll(pm.queryBroadcastReceivers(intentR, PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER));
-                for (ResolveInfo info : deliverSms) {
-                    String packageName = info.activityInfo.packageName;
-                    Log.i(TAG, "packageNameR&D : " + packageName + "---" + info.activityInfo.name);
-                }
-            }
-        });
-    }
-
-    class MyXC_MethodHook extends XC_MethodHook {
-
-        private String hookClass;
-
-        MyXC_MethodHook(String hookClass) {
-            this.hookClass = hookClass;
-        }
-
-        @Override
-        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-            XposedBridge.log(hookClass + "'s has been hooked!!!!!");
-//            param.setResult(null);
+            });
         }
     }
 }
