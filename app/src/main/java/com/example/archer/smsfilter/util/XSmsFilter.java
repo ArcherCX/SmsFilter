@@ -68,7 +68,11 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                                 mMessageBody.setAccessible(true);
                                 String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
                                 ISmsFilterService client = SmsFilterService.getClient();
-                                Log.i(TAG, "client.getFilterKeyword() : " + client.getFilterKeyword());
+                                String filterKeyword = client.getFilterKeyword();
+                                Log.i(TAG, "client.getFilterKeyword() : " + filterKeyword);
+                                if (msgBody.matches(".*(" + filterKeyword + ").*")) {
+                                    param.setResult(null);
+                                }
                             }
                         }
                     } catch (ClassNotFoundException e) {
