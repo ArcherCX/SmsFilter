@@ -6,3 +6,7 @@
 .DS_Store
 /build
 /captures
+/.idea/
+.idea/dictionaries/
+.idea/encodings.xml
+projectFilesBackup/
