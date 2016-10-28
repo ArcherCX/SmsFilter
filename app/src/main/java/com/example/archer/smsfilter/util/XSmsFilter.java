@@ -53,7 +53,7 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     try {
                         Message rilMsg = (Message) param.args[0];
-                        Log.e(TAG, "Sms what = " + rilMsg.what);
+                        XposedBridge.log("Sms what = " + rilMsg.what);
                         /*com.android.internal.telephony.InboundSmsHandler.EVENT_NEW_SMS = 1;
                         * com.android.internal.telephony.InboundSmsHandler.EVENT_INJECT_SMS = 8;*/
                         if (rilMsg.what == 1 || rilMsg.what == 8) {
@@ -69,25 +69,21 @@ public class XSmsFilter implements IXposedHookZygoteInit {
                                 String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
                                 ISmsFilterService client = SmsFilterService.getClient();
                                 String filterKeyword = client.getFilterKeyword();
-                                Log.i(TAG, "client.getFilterKeyword() : " + filterKeyword);
-                                if (msgBody.matches(".*(" + filterKeyword + ").*")) {
+                                boolean matchRs = msgBody.matches(".*(" + filterKeyword + ").*");
+                                XposedBridge.log("client.getFilterKeyword() : " + filterKeyword + " -- and match result : " + matchRs);
+                                if (matchRs) {
                                     ((Message) param.args[0]).what = Integer.MAX_VALUE;
                                 }
                             }
                         }
                     } catch (ClassNotFoundException e) {
-                        e.printStackTrace();
-                        Log.e(TAG, "hook processMessage error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
+                        XposedBridge.log(e);
                     }
                 }
             });
         } catch (Throwable e) {
-            e.printStackTrace();
-            Log.e(TAG, "initZygote error: " + e.getMessage() + "--- detail:" + e.toString() + "\n");
-            StackTraceElement[] stackTrace = e.getStackTrace();
-            for (StackTraceElement element : stackTrace) {
-                Log.e(TAG, element.toString());
-            }
+            XposedBridge.log("initZygote error:");
+            XposedBridge.log(e);
         }
     }
 

@@ -14,6 +14,8 @@ import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
+import de.robv.android.xposed.XposedBridge;
+
 /**
  * 处理进程间通信服务
  */
@@ -45,14 +47,8 @@ public class SmsFilterService extends ISmsFilterService.Stub {
                 Method mAddService = cServiceManager.getDeclaredMethod("addService", String.class, IBinder.class);
                 mAddService.invoke(null, getServiceName(), mSmsFilterService);
             }
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
+        } catch (ClassNotFoundException | InvocationTargetException | NoSuchMethodException | IllegalAccessException e) {
+            XposedBridge.log(e);
         }
     }
 
@@ -69,10 +65,8 @@ public class SmsFilterService extends ISmsFilterService.Stub {
                 Method mGetService = cServiceManager.getDeclaredMethod("getService", String.class);
                 mClient = ISmsFilterService.Stub.asInterface((IBinder) mGetService.invoke(null, getServiceName()));
             } catch (Throwable ex) {
-                ex.printStackTrace();
-                Log.e(TAG, ex.getMessage());
+                XposedBridge.log(ex);
             }
-
         return mClient;
     }
 
