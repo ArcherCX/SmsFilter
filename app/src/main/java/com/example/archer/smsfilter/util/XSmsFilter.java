@@ -2,18 +2,26 @@ package com.example.archer.smsfilter.util;
 
 import android.os.Build;
 import android.os.Message;
+import android.os.Parcel;
+import android.provider.Telephony;
 import android.telephony.SmsMessage;
+import android.util.SparseArray;
 
 import com.example.archer.smsfilter.service.SmsFilterService;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XposedHelpers;
 
 import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
+import static de.robv.android.xposed.XposedHelpers.findClass;
+import static de.robv.android.xposed.XposedHelpers.findMethodExact;
+import static de.robv.android.xposed.XposedHelpers.getIntField;
+import static de.robv.android.xposed.XposedHelpers.getObjectField;
+import static de.robv.android.xposed.XposedHelpers.getStaticIntField;
 
 /**
  * Description:
@@ -47,36 +55,50 @@ public class XSmsFilter implements IXposedHookZygoteInit {
     public void initZygote(StartupParam startupParam) throws Throwable {
         try {
             registerBinder();
-            Class<?> cInboundSmsHandler = Class.forName("com.android.internal.telephony.InboundSmsHandler$DeliveringState");
-            findAndHookMethod(cInboundSmsHandler, "processMessage", Message.class, new XC_MethodHook() {
+            final Class<?> cInboundSmsHandler = findClass("com.android.internal.telephony.InboundSmsHandler", null);
+//            final Class<?> cHookState = Class.forName("com.android.internal.telephony.InboundSmsHandler$DeliveringState");
+//            final Class<?> cHookState = Class.forName("com.android.internal.telephony.InboundSmsHandler$IdleState");
+            final Class<?> cHookState = Class.forName("com.android.internal.util.StateMachine$SmHandler");
+//            findAndHookMethod(cHookState, "processMessage", Message.class, new XC_MethodHook() {
+            findAndHookMethod(cHookState, "handleMessage", Message.class, new XC_MethodHook() {
+
+                private boolean matchRs;
+
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     try {
                         Message rilMsg = (Message) param.args[0];
-                        XposedBridge.log("Sms what = " + rilMsg.what);
+//                        XposedBridge.log("hook method : DeliveringState.processMessage --- Sms what = " + rilMsg.what);
+                        if (rilMsg.what < 10) {
+                            XposedBridge.log("hook method : SmHandler.handleMessage --- Sms what = " + rilMsg.what);
+                        }
                         /*com.android.internal.telephony.InboundSmsHandler.EVENT_NEW_SMS = 1;
                         * com.android.internal.telephony.InboundSmsHandler.EVENT_INJECT_SMS = 8;*/
-                        if (rilMsg.what == 1 || rilMsg.what == 8) {
-                            Class<?> AsyncResult = Class.forName("android.os.AsyncResult");
-                            Field result = AsyncResult.getField("result");
-                            SmsMessage sms = (SmsMessage) result.get(rilMsg.obj);
-                            if (sms != null) {
-                                Field mWrappedSmsMessage = SmsMessage.class.getDeclaredField("mWrappedSmsMessage");
-                                mWrappedSmsMessage.setAccessible(true);
-                                Class<?> SmsMessageBase = Class.forName("com.android.internal.telephony.SmsMessageBase");
-                                Field mMessageBody = SmsMessageBase.getDeclaredField("mMessageBody");
-                                mMessageBody.setAccessible(true);
-                                String msgBody = (String) mMessageBody.get(mWrappedSmsMessage.get(sms));
+                        int EVENT_NEW_SMS = getStaticIntField(cInboundSmsHandler, "EVENT_NEW_SMS");
+                        if (rilMsg.what == EVENT_NEW_SMS) {
+                            Object msgObj = getObjectField(rilMsg.obj, "result");
+                            if (msgObj != null && msgObj.getClass() == SmsMessage.class) {
+                                SmsMessage sms = (SmsMessage) msgObj;
+                                String msgBody = (String) getObjectField(getObjectField(sms, "mWrappedSmsMessage"), "mMessageBody");
                                 ISmsFilterService client = SmsFilterService.getClient();
                                 String filterKeyword = client.getFilterKeyword();
-                                boolean matchRs = msgBody.matches(".*(" + filterKeyword + ").*");
-                                XposedBridge.log("client.getFilterKeyword() : " + filterKeyword + " -- and match result : " + matchRs);
+                                matchRs = msgBody.matches(".*(" + filterKeyword + ").*");
                                 if (matchRs) {
-                                    ((Message) param.args[0]).what = Integer.MAX_VALUE;
+                                    //取消对该消息的处理（handleMessage的调用）
+                                    param.setResult(null);
+                                    //通知RIL该条短信已经被处理，防止RIL block不再接收新消息
+                                    int mStateStackTopIndex = getIntField(param.thisObject, "mStateStackTopIndex");
+                                    Object[] mStateStack = (Object[]) getObjectField(param.thisObject, "mStateStack");
+                                    Object state = getObjectField(mStateStack[mStateStackTopIndex], "state");
+                                    Object outerInboundSmsHandler = getObjectField(state, "this$0");
+                                    Method acknowledgeLastIncomingSms = findMethodExact(outerInboundSmsHandler.getClass(), "acknowledgeLastIncomingSms", boolean.class, int.class, Message.class);
+                                    acknowledgeLastIncomingSms.invoke(outerInboundSmsHandler, true, Telephony.Sms.Intents.RESULT_SMS_HANDLED, null);
                                 }
+//                                XposedBridge.log("hook method : DeliveringState.processMessage --- client.getFilterKeyword() : " + filterKeyword + " -- and match result : " + matchRs + " --- msg = " + msgBody);
+                                XposedBridge.log("hook method : IdleState.processMessage --- client.getFilterKeyword() : " + filterKeyword + " -- and match result : " + matchRs + " --- msg = " + msgBody);
                             }
                         }
-                    } catch (ClassNotFoundException e) {
+                    } catch (XposedHelpers.ClassNotFoundError e) {
                         XposedBridge.log(e);
                     }
                 }
@@ -84,6 +106,149 @@ public class XSmsFilter implements IXposedHookZygoteInit {
         } catch (Throwable e) {
             XposedBridge.log("initZygote error:");
             XposedBridge.log(e);
+        }
+//        debugHook();
+    }
+
+    private void debugHook() {
+        Class<?> cHook = null;
+
+        try {
+            cHook = Class.forName("android.telephony.SmsMessage");
+        } catch (ClassNotFoundException e) {
+            XposedBridge.log(e);
+        }
+        if (cHook != null) {
+            findAndHookMethod(cHook, "newFromCMT", String[].class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    String[] msg = (String[]) param.args[0];
+                    for (int i = 0; i < msg.length; i++) {
+                        XposedBridge.log("newFromCMT line[" + i + "] = " + msg[i]);
+                    }
+                }
+            });
+            findAndHookMethod(cHook, "newFromParcel", Parcel.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    SmsMessage result = (SmsMessage) param.getResult();
+                    Object mWrappedSmsMessage = getObjectField(result, "mWrappedSmsMessage");
+                    String mMessageBody = (String) getObjectField(mWrappedSmsMessage, "mMessageBody");
+                    XposedBridge.log("newFromParcel message body = " + mMessageBody);
+                }
+            });
+
+            try {
+                cHook = findClass("com.android.internal.util.State", null);
+                findAndHookMethod(cHook, "enter", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject.getClass().getCanonicalName().startsWith("com.android.internal.telephony.InboundSmsHandler")) {
+                            XposedBridge.log(param.thisObject.getClass().getName() + " !!! Enter");
+                        }
+                    }
+                });
+                findAndHookMethod(cHook, "exit", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.thisObject.getClass().getCanonicalName().startsWith("com.android.internal.telephony.InboundSmsHandler")) {
+                            XposedBridge.log(param.thisObject.getClass().getName() + " !!! Exit");
+                        }
+                    }
+                });
+                findAndHookMethod(cHook, "processMessage", Message.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Message msg = (Message) param.args[0];
+                        if (param.thisObject.getClass().getCanonicalName().startsWith("com.android.internal.telephony.InboundSmsHandler")) {
+                            XposedBridge.log(param.thisObject.getClass().getName() + " !!! processMessage , and what = " + msg.what);
+                        }
+                    }
+                });
+            } catch (XposedHelpers.ClassNotFoundError e) {
+                XposedBridge.log(e);
+            }
+
+            try {
+                cHook = findClass("com.android.internal.util.StateMachine$SmHandler", null);
+                Class<?> cState = findClass("com.android.internal.util.State", null);
+                findAndHookMethod(cHook, "performTransitions", cState, Message.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.args[0] == null || !param.args[0].getClass().getCanonicalName().startsWith("com.android.internal.telephony.InboundSmsHandler"))
+                            return;
+                        String paramStateClass = param.args[0].getClass().getSimpleName();
+                        Object mLogRecords = getObjectField(param.thisObject, "mLogRecords");
+                        Method mLogOnlyTransitions = findMethodExact(mLogRecords.getClass(), "logOnlyTransitions");
+                        boolean LogOnlyTransitions = (boolean) mLogOnlyTransitions.invoke(mLogRecords);
+                        Object[] mStateStack = (Object[]) getObjectField(param.thisObject, "mStateStack");
+                        int mStateStackTopIndex = getIntField(param.thisObject, "mStateStackTopIndex");
+                        Object orgState = getObjectField(mStateStack[mStateStackTopIndex], "state");
+                        Object mDestState = getObjectField(param.thisObject, "mDestState");
+                        XposedBridge.log("performTransitions msgProcessedState is : " + paramStateClass + " -- logOnlyTransitions = " + LogOnlyTransitions + " -- orgState : " + orgState.getClass().getSimpleName() + " -- mDestState is " + ((mDestState == null) ? "null" : mDestState.getClass().getSimpleName()));
+                    }
+                });
+                Class<?> cStateInfo = findClass("com.android.internal.util.StateMachine$SmHandler$StateInfo", null);
+                findAndHookMethod(cHook, "invokeExitMethods", cStateInfo, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+//                        (mStateStackTopIndex >= 0) && (mStateStack[mStateStackTopIndex] != commonStateInfo)
+                        boolean b = param.args[0] != null;
+                        int mStateStackTopIndex = getIntField(param.thisObject, "mStateStackTopIndex");
+                        Log.d(TAG, (b ? "invokeExitMethods param type is : " + getObjectField(param.args[0], "state").getClass().getSimpleName() : "invokeExitMethods param is null")
+                                + " -- and mStateStackTopIndex = " + mStateStackTopIndex
+                                + " -- mStateStack[mStateStackTopIndex] != commonStateInfo ? " + getObjectField(((Object[]) getObjectField(param.thisObject, "mStateStack"))[mStateStackTopIndex], "state").getClass().getSimpleName());
+                    }
+                });
+                findAndHookMethod(cHook, "invokeEnterMethods", int.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        android.util.Log.w(TAG, "invokeEnterMethods: stateStackEnteringIndex = " + param.args[0] + " -- mStateStackTopIndex = " + getIntField(param.thisObject, "mStateStackTopIndex"));
+                    }
+                });
+            } catch (XposedHelpers.ClassNotFoundError e) {
+                XposedBridge.log(e);
+            }
+
+            try {
+                cHook = findClass("com.android.internal.telephony.RIL", null);
+                final Class<?> finalCHook = cHook;
+                findAndHookMethod(cHook, "processUnsolicited", Parcel.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Parcel p = (Parcel) param.args[0];
+                        int curPos = p.dataPosition();
+                        int response = p.readInt();
+                        Method responseToString = findMethodExact(finalCHook, "responseToString", int.class);
+                        String responsString = (String) responseToString.invoke(null, response);
+//                        if (responsString.toLowerCase().contains("sms") || responsString.equals("UNSOL_RESPONSE_RADIO_STATE_CHANGED")) {
+//                        }
+                        android.util.Log.e(TAG, "RIL processUnsolicited response : " + responsString + " -- " + response);
+                        p.setDataPosition(curPos);
+                    }
+                });
+                findAndHookMethod(cHook, "processSolicited", Parcel.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Parcel p = (Parcel) param.args[0];
+                        int curPos = p.dataPosition();
+                        int serial = p.readInt();
+                        SparseArray mRequestList = (SparseArray) getObjectField(param.thisObject, "mRequestList");
+                        Object rilRequest = mRequestList.get(serial);
+                        if (rilRequest == null) {
+                            Log.d(TAG, "processSolicited: doesn't get serial " + serial + " request,it is null");
+                        } else {
+                            int mRequest = getIntField(rilRequest, "mRequest");
+                            Method requestToString = findMethodExact(finalCHook, "requestToString", int.class);
+                            String requestString = (String) requestToString.invoke(null, mRequest);
+                            android.util.Log.v(TAG, "RIL processSolicited request : " + requestString + " -- " + serial);
+                        }
+                        p.setDataPosition(curPos);
+                    }
+                });
+            } catch (XposedHelpers.ClassNotFoundError e) {
+                XposedBridge.log(e);
+            }
         }
     }
 
